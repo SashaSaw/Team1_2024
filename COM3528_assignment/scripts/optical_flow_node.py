@@ -51,22 +51,8 @@ class OpticalFlowNode:
             optical_flow = cv2.calcOpticalFlowFarneback(
                 self.prev_frame, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
 
-
-            # Convert optical flow to HSV image for visualization
-            hsv = np.zeros_like(current_frame)
-            hsv[..., 1] = 255
-
-            # Calculate magnitude and angle of optical flow vectors
-            mag, ang = cv2.cartToPolar(optical_flow[..., 0], optical_flow[..., 1])
-
-            # Set the hue according to the direction of flow
-            hsv[..., 0] = ang * 180 / np.pi / 2
-
-            # Set the value according to the magnitude of flow
-            hsv[..., 2] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
-
-            # Convert HSV to BGR
-            optical_flow_img = draw_flow(current_gray,optical_flow)#cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+            # Drawing the flow over the gray image
+            optical_flow_img = draw_flow(current_gray,optical_flow)
 
             # Publish the optical flow image
             self.optical_flow_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, encoding="bgr8"))
