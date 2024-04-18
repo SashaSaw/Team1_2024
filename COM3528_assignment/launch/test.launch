@@ -1,0 +1,4 @@
+<launch>
+  <node pkg="COM3528_assignment" type="optical_flow_node.py" name="optical_flow_node" output="screen">
+  </node>
+</launch>
