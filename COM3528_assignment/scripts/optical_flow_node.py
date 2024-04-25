@@ -24,6 +24,13 @@ def draw_flow(img, flow, step=16):
 
     return img_bgr
 
+def draw_movement(flow, frame):
+    magnitude, angle = cv2.cartToPolar(flow[...,0],flow[...,1])
+    threshold= 5.0
+    looming_mask = magnitude > threshold
+    frame[looming_mask] = [0, 0, 255]
+    return frame
+
 def detect_looming_towards(flow):
     output = 0
     magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
@@ -51,8 +58,10 @@ class OpticalFlowNode:
         self.prev_frame = None
         self.left_camera_sub = rospy.Subscriber('/miro/sensors/caml/compressed', CompressedImage, self.left_image_callback)
         self.right_camera_sub = rospy.Subscriber('/miro/sensors/camr/compressed', CompressedImage, self.right_image_callback)
-        self.optical_flow_pub = rospy.Publisher('/optical_flow', String, queue_size=10)
+        self.looming_pub = rospy.Publisher('/looming', String, queue_size=1)
+        self.optical_flow_pub = rospy.Publisher('/optical_flow', Image, queue_size=1)
         self.looming_right=0
+        self.counter = 0
         self.looming_left=0
         print("initialising")
 
@@ -72,13 +81,20 @@ class OpticalFlowNode:
             # Drawing the flow over the gray image
             #optical_flow_img = draw_flow(current_gray,optical_flow)
             self.looming_left = detect_looming_towards(optical_flow)
-            if self.looming_left + self.looming_right > 0:
+
+            print(f"left: {self.looming_left}")
+            print(f"right: {self.looming_right}")
+            total_looming = self.looming_left + self.looming_right
+            print(total_looming)
+            if total_looming > 0:
                 if self.looming_left > self.looming_right:
-                    self.optical_flow_pub.publish("Something approaches from the Left")
+                    self.looming_pub.publish("Something approaches from the Left")
                 elif self.looming_right > self.looming_left:
-                    self.optical_flow_pub.publish("Something approaches from the right")
+                    self.looming_pub.publish("Something approaches from the right")
+            
+            img = draw_movement(optical_flow, current_frame)
             # Publish the optical flow image
-            #self.optical_flow_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, encoding="bgr8"))
+            self.optical_flow_pub.publish(self.bridge.cv2_to_imgmsg(img, encoding="bgr8"))
             
         # Store the current frame for the next iteration
         self.prev_frame = current_gray
@@ -98,8 +114,6 @@ class OpticalFlowNode:
             # Drawing the flow over the gray image
             #optical_flow_img = draw_flow(current_gray,optical_flow)
             self.looming_right = detect_looming_towards(optical_flow)
-            # Publish the optical flow image
-            #self.optical_flow_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, encoding="bgr8"))
             
         # Store the current frame for the next iteration
         self.prev_frame = current_gray
