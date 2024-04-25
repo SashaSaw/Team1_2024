@@ -2,6 +2,7 @@
 
 import rospy
 from sensor_msgs.msg import Image, CompressedImage
+from std_msgs.msg import String
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
@@ -23,23 +24,40 @@ def draw_flow(img, flow, step=16):
 
     return img_bgr
 
+def detect_looming_towards(flow):
+    output = 0
+    magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+
+    # Calculate mean magnitude to determine if the object is moving closer or expanding
+    mean_magnitude = np.mean(magnitude)
+    # Define a threshold for what you consider to be an "approach"
+    approach_threshold = 3.0  # adjust based on your specific needs
+
+    looming_threshold = 5.0
+
+    looming_mask = magnitude > looming_threshold
+
+    if mean_magnitude > approach_threshold:
+        looming = sum(map(sum, looming_mask))
+        output = looming
+
+    return output
+
 class OpticalFlowNode:
     def __init__(self):
         node_name = "optical_flow_node"
         rospy.init_node(node_name, anonymous=True)
         self.bridge = CvBridge()
         self.prev_frame = None
-        self.image_sub = rospy.Subscriber('/miro/sensors/caml/compressed', CompressedImage, self.image_callback)
-        self.optical_flow_pub = rospy.Publisher('/optical_flow', Image, queue_size=10)
-        rospy.on_shutdown(self.cleanup)
+        self.left_camera_sub = rospy.Subscriber('/miro/sensors/caml/compressed', CompressedImage, self.left_image_callback)
+        self.right_camera_sub = rospy.Subscriber('/miro/sensors/camr/compressed', CompressedImage, self.right_image_callback)
+        self.optical_flow_pub = rospy.Publisher('/optical_flow', String, queue_size=10)
+        self.looming_right=0
+        self.looming_left=0
         print("initialising")
-        img = np.zeros((512, 512, 3), np.uint8)
-        cv2.imshow('Test Window', img)
 
-    def cleanup(self):
-        cv2.destroyAllWindows()
 
-    def image_callback(self, msg):
+    def left_image_callback(self, msg):
         current_frame = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
 
         # Convert the current frame to grayscale
@@ -52,10 +70,36 @@ class OpticalFlowNode:
                 self.prev_frame, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
 
             # Drawing the flow over the gray image
-            optical_flow_img = draw_flow(current_gray,optical_flow)
-
+            #optical_flow_img = draw_flow(current_gray,optical_flow)
+            self.looming_left = detect_looming_towards(optical_flow)
+            if self.looming_left + self.looming_right > 0:
+                if self.looming_left > self.looming_right:
+                    self.optical_flow_pub.publish("Something approaches from the Left")
+                elif self.looming_right > self.looming_left:
+                    self.optical_flow_pub.publish("Something approaches from the right")
             # Publish the optical flow image
-            self.optical_flow_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, encoding="bgr8"))
+            #self.optical_flow_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, encoding="bgr8"))
+            
+        # Store the current frame for the next iteration
+        self.prev_frame = current_gray
+
+    def right_image_callback(self, msg):
+        current_frame = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
+
+        # Convert the current frame to grayscale
+        current_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
+
+        # Check if we have a previous frame
+        if self.prev_frame is not None:
+            # Calculate optical flow using Lucas-Kanade method
+            optical_flow = cv2.calcOpticalFlowFarneback(
+                self.prev_frame, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+
+            # Drawing the flow over the gray image
+            #optical_flow_img = draw_flow(current_gray,optical_flow)
+            self.looming_right = detect_looming_towards(optical_flow)
+            # Publish the optical flow image
+            #self.optical_flow_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, encoding="bgr8"))
             
         # Store the current frame for the next iteration
         self.prev_frame = current_gray
