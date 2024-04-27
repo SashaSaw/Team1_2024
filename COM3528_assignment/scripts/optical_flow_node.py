@@ -38,7 +38,7 @@ def detect_looming_towards(flow):
     # Calculate mean magnitude to determine if the object is moving closer or expanding
     mean_magnitude = np.mean(magnitude)
     # Define a threshold for what you consider to be an "approach"
-    approach_threshold = 3.0  # adjust based on your specific needs
+    approach_threshold = 3.0 
 
     looming_threshold = 5.0
 
@@ -55,68 +55,73 @@ class OpticalFlowNode:
         node_name = "optical_flow_node"
         rospy.init_node(node_name, anonymous=True)
         self.bridge = CvBridge()
-        self.prev_frame = None
+        self.prev_frame_left = None
+        self.prev_frame_right = None
+        self.publish_count = 0
+        self.interval_start = rospy.Time.now()
         self.left_camera_sub = rospy.Subscriber('/miro/sensors/caml/compressed', CompressedImage, self.left_image_callback)
         self.right_camera_sub = rospy.Subscriber('/miro/sensors/camr/compressed', CompressedImage, self.right_image_callback)
         self.looming_pub = rospy.Publisher('/looming', String, queue_size=1)
         self.optical_flow_pub = rospy.Publisher('/optical_flow', Image, queue_size=1)
         self.looming_right=0
-        self.counter = 0
         self.looming_left=0
         print("initialising")
 
 
     def left_image_callback(self, msg):
         current_frame = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
-
-        # Convert the current frame to grayscale
         current_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
 
         # Check if we have a previous frame
-        if self.prev_frame is not None:
+        if self.prev_frame_left is not None:
             # Calculate optical flow using Lucas-Kanade method
             optical_flow = cv2.calcOpticalFlowFarneback(
-                self.prev_frame, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-
-            # Drawing the flow over the gray image
-            #optical_flow_img = draw_flow(current_gray,optical_flow)
+                self.prev_frame_left, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
             self.looming_left = detect_looming_towards(optical_flow)
-
-            print(f"left: {self.looming_left}")
-            print(f"right: {self.looming_right}")
-            total_looming = self.looming_left + self.looming_right
-            print(total_looming)
-            if total_looming > 0:
-                if self.looming_left > self.looming_right:
-                    self.looming_pub.publish("Something approaches from the Left")
-                elif self.looming_right > self.looming_left:
-                    self.looming_pub.publish("Something approaches from the right")
-            
-            img = draw_movement(optical_flow, current_frame)
-            # Publish the optical flow image
-            self.optical_flow_pub.publish(self.bridge.cv2_to_imgmsg(img, encoding="bgr8"))
             
         # Store the current frame for the next iteration
-        self.prev_frame = current_gray
+        self.prev_frame_left = current_gray
+        self.compare_and_publish()
 
     def right_image_callback(self, msg):
         current_frame = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
-
-        # Convert the current frame to grayscale
         current_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
 
         # Check if we have a previous frame
-        if self.prev_frame is not None:
+        if self.prev_frame_right is not None:
             # Calculate optical flow using Lucas-Kanade method
             optical_flow = cv2.calcOpticalFlowFarneback(
-                self.prev_frame, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-
-            # Drawing the flow over the gray image
-            #optical_flow_img = draw_flow(current_gray,optical_flow)
+                self.prev_frame_right, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
             self.looming_right = detect_looming_towards(optical_flow)
             
         # Store the current frame for the next iteration
-        self.prev_frame = current_gray
+        self.prev_frame_right = current_gray
+        self.compare_and_publish()
+
+    def compare_and_publish(self):
+        now = rospy.Time.now()
+        if self.publish_count == 0:
+            self.interval_start = now  # Reset the interval start at the beginning of counting
+        self.publish_count += 1
+
+        total_looming = self.looming_left + self.looming_right
+        print(f"left: {self.looming_left}")
+        print(f"right: {self.looming_right}")
+        print(total_looming)
+        
+        if total_looming > 0:
+            if self.looming_left > self.looming_right:
+                self.looming_pub.publish("Something approaches from the left")
+            elif self.looming_right > self.looming_left:
+                self.looming_pub.publish("Something approaches from the right")
+        else:
+            self.looming_pub.publish("No looming detected")
+            
+        elapsed_time = (now - self.interval_start).to_sec()
+        if elapsed_time >= 1.0:  # Check if one second has passed
+            rate = self.publish_count / elapsed_time
+            rospy.loginfo(f'Publish rate: {rate:.2f} messages per second')
+            self.publish_count = 0  # Reset the count after logging
 
 if __name__ == '__main__':
     try:
