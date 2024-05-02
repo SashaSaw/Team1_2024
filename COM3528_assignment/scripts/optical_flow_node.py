@@ -1,13 +1,24 @@
 #!/usr/bin/env python3
 
+import os
 import rospy
 from sensor_msgs.msg import Image, CompressedImage
 from std_msgs.msg import String
+from geometry_msgs.msg import Twist
+from geometry_msgs.msg import TwistStamped  # ROS cmd_vel (velocity control) message
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
 
+try:  # For convenience, import this util separately
+    from miro2.lib import wheel_speed2cmd_vel  # Python 3
+except ImportError:
+    from miro2.utils import wheel_speed2cmd_vel  # Python 2
+
 def draw_flow(img, flow, step=16):
+    """
+    draw the flow arrows over an image and return the edited image
+    """
     print ("drawing_flow")
     h, w = img.shape[:2]
     y, x = np.mgrid[step/2:h:step, step/2:w:step].reshape(2,-1).astype(int)
@@ -24,33 +35,54 @@ def draw_flow(img, flow, step=16):
 
     return img_bgr
 
+
+
 def draw_movement(flow, frame):
+    """
+    draw red pixels where looming points are on the input frame
+    """
+    # get the magnitudes and angles of the flow
     magnitude, angle = cv2.cartToPolar(flow[...,0],flow[...,1])
+    # Define a threshold for at what magnitude is a point considered a looming point
     threshold= 5.0
+    # filter the magnitude 2D list using the looming threshold
     looming_mask = magnitude > threshold
+    # store the value for red in the picture where there are 'looming points'
     frame[looming_mask] = [0, 0, 255]
     return frame
 
-def detect_looming_towards(flow):
-    output = 0
-    magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
 
+
+def detect_looming_towards(flow):
+    """
+    detect points where there is looming when there is 'approaching looming' and return number of looming points
+    """
+    output = 0
+    # get the magnitudes and angles of the flow
+    magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+    
     # Calculate mean magnitude to determine if the object is moving closer or expanding
     mean_magnitude = np.mean(magnitude)
-    # Define a threshold for what you consider to be an "approach"
-    approach_threshold = 3.0 
-
+    
+    # Define a threshold for what is considered an "approach"
+    approach_threshold = 2.0 
+    
+    # Define a threshold for at what magnitude is a point considered a looming point
     looming_threshold = 5.0
-
+    
+    # filter the magnitude 2D list using the looming threshold
     looming_mask = magnitude > looming_threshold
-
+    
+    # if looming is approaching count the number of looming points and return it
     if mean_magnitude > approach_threshold:
         looming = sum(map(sum, looming_mask))
         output = looming
-
     return output
 
+
+
 class OpticalFlowNode:
+
     def __init__(self):
         node_name = "optical_flow_node"
         rospy.init_node(node_name, anonymous=True)
@@ -61,15 +93,51 @@ class OpticalFlowNode:
         self.interval_start = rospy.Time.now()
         self.left_camera_sub = rospy.Subscriber('/miro/sensors/caml/compressed', CompressedImage, self.left_image_callback)
         self.right_camera_sub = rospy.Subscriber('/miro/sensors/camr/compressed', CompressedImage, self.right_image_callback)
-        self.looming_pub = rospy.Publisher('/looming', String, queue_size=1)
-        self.optical_flow_pub = rospy.Publisher('/optical_flow', Image, queue_size=1)
+        #self.looming_pub = rospy.Publisher('/looming', String, queue_size=1)
+        #self.optical_flow_pub = rospy.Publisher('/optical_flow', Image, queue_size=1)
+        
+        topic_base_name = "/" + os.getenv("MIRO_ROBOT_NAME")
+        self.vel_pub  = rospy.Publisher(
+            topic_base_name + "/control/cmd_vel", TwistStamped, queue_size=0
+        )
+        self.rate = rospy.Rate(10) # 10 Hz
         self.looming_right=0
         self.looming_left=0
         print("initialising")
 
 
+
+    def drive(self, speed_l=0.1, speed_r=0.1):  # (m/sec, m/sec)
+        """
+        Wrapper to simplify driving MiRo by converting wheel speeds to cmd_vel
+        """
+        # Prepare an empty velocity command message
+        msg_cmd_vel = TwistStamped()
+
+        # Desired wheel speed (m/sec)
+        wheel_speed = [speed_l, speed_r]
+
+        # Convert wheel speed to command velocity (m/sec, Rad/sec)
+        (dr, dtheta) = wheel_speed2cmd_vel(wheel_speed)
+
+        # Update the message with the desired speed
+        msg_cmd_vel.twist.linear.x = dr
+        msg_cmd_vel.twist.angular.z = dtheta
+
+        # Publish message to control/cmd_vel topic
+        self.vel_pub.publish(msg_cmd_vel)
+
+
+
+
     def left_image_callback(self, msg):
+        """
+        Handle the counting of 'looming points' in the left camera
+        """
+        # get the current frame from imgmsg
         current_frame = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        
+        # convert color image to grayscale
         current_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
 
         # Check if we have a previous frame
@@ -83,8 +151,16 @@ class OpticalFlowNode:
         self.prev_frame_left = current_gray
         self.compare_and_publish()
 
+
+
     def right_image_callback(self, msg):
+        """
+        Handle the counting of 'looming points' in the left camera
+        """
+        # get the current frame from imgmsg
         current_frame = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        
+        # convert color image to grayscale
         current_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
 
         # Check if we have a previous frame
@@ -98,25 +174,49 @@ class OpticalFlowNode:
         self.prev_frame_right = current_gray
         self.compare_and_publish()
 
+
+
     def compare_and_publish(self):
+        """
+        Check for approaching looming and direction of looming and handle movement
+        """
+        # get the current time and start the publish per second interval
         now = rospy.Time.now()
         if self.publish_count == 0:
             self.interval_start = now  # Reset the interval start at the beginning of counting
         self.publish_count += 1
 
+        # calculate total looming and print all the looming values
         total_looming = self.looming_left + self.looming_right
         print(f"left: {self.looming_left}")
         print(f"right: {self.looming_right}")
         print(total_looming)
         
+        # prepare a twist message for robot movement
+        #vel_msg = Twist()
+        speed_left = 0
+        speed_right = 0
+
         if total_looming > 0:
-            if self.looming_left > self.looming_right:
-                self.looming_pub.publish("Something approaches from the left")
+            if self.looming_left > self.looming_right:    
+                #self.looming_pub.publish("Something approaches from the left")
+                print("looming left - stopping")
+                speed_left = 0.2
+                speed_right = 0.4
             elif self.looming_right > self.looming_left:
-                self.looming_pub.publish("Something approaches from the right")
+                #self.looming_pub.publish("Something approaches from the right")
+                print("looming right - stopping")
+                speed_left = 0.4
+                speed_right = 0.2
         else:
-            self.looming_pub.publish("No looming detected")
-            
+            #self.looming_pub.publish("No looming detected")
+            print("no looming - moving forward")
+            speed_left = 0.4
+            speed_right = 0.4
+        
+        self.drive(speed_left,speed_right)
+
+        # calculate the amount of time passed
         elapsed_time = (now - self.interval_start).to_sec()
         if elapsed_time >= 1.0:  # Check if one second has passed
             rate = self.publish_count / elapsed_time

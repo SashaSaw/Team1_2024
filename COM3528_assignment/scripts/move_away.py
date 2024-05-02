@@ -163,12 +163,12 @@ class MiRoClient:
             # Step 1. detect looming stimuli
             if self.status_code == 1:
 
-                    self.detect_looming()
+                self.detect_looming()
 
             # Step 2. turn away from it
             elif self.status_code == 2:
-                self.turn_away(self.looming_direction)
 
+                self.turn_away(self.looming_direction)
 
             # Fall back
             else:
