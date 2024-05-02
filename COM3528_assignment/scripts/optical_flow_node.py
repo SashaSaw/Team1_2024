@@ -2,6 +2,7 @@
 
 import os
 import rospy
+import time
 from sensor_msgs.msg import Image, CompressedImage
 from std_msgs.msg import String
 from geometry_msgs.msg import Twist
@@ -48,7 +49,7 @@ def draw_movement(flow, frame):
     # filter the magnitude 2D list using the looming threshold
     looming_mask = magnitude > threshold
     # store the value for red in the picture where there are 'looming points'
-    frame[looming_mask] = [0, 0, 255]
+    frame[looming_mask] = (0, 0, 255)
     return frame
 
 
@@ -65,10 +66,10 @@ def detect_looming_towards(flow):
     mean_magnitude = np.mean(magnitude)
     
     # Define a threshold for what is considered an "approach"
-    approach_threshold = 2.0 
+    approach_threshold = 2.5 
     
     # Define a threshold for at what magnitude is a point considered a looming point
-    looming_threshold = 5.0
+    looming_threshold = 4.0
     
     # filter the magnitude 2D list using the looming threshold
     looming_mask = magnitude > looming_threshold
@@ -89,13 +90,12 @@ class OpticalFlowNode:
         self.bridge = CvBridge()
         self.prev_frame_left = None
         self.prev_frame_right = None
-        self.publish_count = 0
-        self.interval_start = rospy.Time.now()
         self.left_camera_sub = rospy.Subscriber('/miro/sensors/caml/compressed', CompressedImage, self.left_image_callback)
         self.right_camera_sub = rospy.Subscriber('/miro/sensors/camr/compressed', CompressedImage, self.right_image_callback)
         #self.looming_pub = rospy.Publisher('/looming', String, queue_size=1)
-        #self.optical_flow_pub = rospy.Publisher('/optical_flow', Image, queue_size=1)
-        
+        self.optical_flowl_pub = rospy.Publisher('/optical_flowl', Image, queue_size=0)
+        self.optical_flowr_pub = rospy.Publisher('/optical_flowr', Image, queue_size=0)
+        self.state = 0
         topic_base_name = "/" + os.getenv("MIRO_ROBOT_NAME")
         self.vel_pub  = rospy.Publisher(
             topic_base_name + "/control/cmd_vel", TwistStamped, queue_size=0
@@ -107,7 +107,7 @@ class OpticalFlowNode:
 
 
 
-    def drive(self, speed_l=0.1, speed_r=0.1):  # (m/sec, m/sec)
+    def drive(self, speed_l, speed_r):  # (m/sec, m/sec)
         """
         Wrapper to simplify driving MiRo by converting wheel speeds to cmd_vel
         """
@@ -145,6 +145,9 @@ class OpticalFlowNode:
             # Calculate optical flow using Lucas-Kanade method
             optical_flow = cv2.calcOpticalFlowFarneback(
                 self.prev_frame_left, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+            
+            optical_flow_img = draw_movement(optical_flow, current_frame)
+            self.optical_flowl_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, "bgr8"))
             self.looming_left = detect_looming_towards(optical_flow)
             
         # Store the current frame for the next iteration
@@ -168,6 +171,9 @@ class OpticalFlowNode:
             # Calculate optical flow using Lucas-Kanade method
             optical_flow = cv2.calcOpticalFlowFarneback(
                 self.prev_frame_right, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+            
+            optical_flow_img = draw_movement(optical_flow, current_frame)
+            self.optical_flowr_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, "bgr8"))
             self.looming_right = detect_looming_towards(optical_flow)
             
         # Store the current frame for the next iteration
@@ -180,48 +186,37 @@ class OpticalFlowNode:
         """
         Check for approaching looming and direction of looming and handle movement
         """
-        # get the current time and start the publish per second interval
-        now = rospy.Time.now()
-        if self.publish_count == 0:
-            self.interval_start = now  # Reset the interval start at the beginning of counting
-        self.publish_count += 1
 
         # calculate total looming and print all the looming values
         total_looming = self.looming_left + self.looming_right
         print(f"left: {self.looming_left}")
         print(f"right: {self.looming_right}")
         print(total_looming)
-        
-        # prepare a twist message for robot movement
-        #vel_msg = Twist()
-        speed_left = 0
-        speed_right = 0
 
-        if total_looming > 0:
-            if self.looming_left > self.looming_right:    
-                #self.looming_pub.publish("Something approaches from the left")
-                print("looming left - stopping")
-                speed_left = 0.2
-                speed_right = 0.4
-            elif self.looming_right > self.looming_left:
-                #self.looming_pub.publish("Something approaches from the right")
-                print("looming right - stopping")
-                speed_left = 0.4
-                speed_right = 0.2
-        else:
-            #self.looming_pub.publish("No looming detected")
-            print("no looming - moving forward")
-            speed_left = 0.4
-            speed_right = 0.4
+        if self.state == 0:
+            print("detecting looming...")
+            if total_looming > 0:
+                if self.looming_left < self.looming_right:    
+                    #self.looming_pub.publish("Something approaches from the left")
+                    print("looming left - turning")
+                    self.state = 1
+                elif self.looming_right > self.looming_left:
+                    #self.looming_pub.publish("Something approaches from the right")
+                    print("looming right - turning")
+                    self.state = 2
+            else:
+                #self.looming_pub.publish("No looming detected")
+                print("no looming - moving forward")
+                self.state = 0
         
-        self.drive(speed_left,speed_right)
-
-        # calculate the amount of time passed
-        elapsed_time = (now - self.interval_start).to_sec()
-        if elapsed_time >= 1.0:  # Check if one second has passed
-            rate = self.publish_count / elapsed_time
-            rospy.loginfo(f'Publish rate: {rate:.2f} messages per second')
-            self.publish_count = 0  # Reset the count after logging
+        if self.state == 0:
+            self.drive(0.1,0.1)
+        elif self.state == 1:
+            self.drive(0.1,0.2)
+            self.state = 0
+        elif self.state == 2:
+            self.drive(0.2,0.1)
+            self.state = 0
 
 if __name__ == '__main__':
     try:
