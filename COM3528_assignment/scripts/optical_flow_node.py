@@ -54,22 +54,21 @@ def draw_movement(flow, frame):
 
 
 
-def detect_looming_towards(flow):
+def detect_looming_and_looming_direction(magnitude, angle):
     """
     detect points where there is looming when there is 'approaching looming' and return number of looming points
     """
-    output = 0
-    # get the magnitudes and angles of the flow
-    magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+    looming = 0
+    direction = ""
     
     # Calculate mean magnitude to determine if the object is moving closer or expanding
     mean_magnitude = np.mean(magnitude)
-    
+    #print(f"mean_magnitude: {mean_magnitude}")
     # Define a threshold for what is considered an "approach"
-    approach_threshold = 2.5 
+    approach_threshold = 2.0
     
     # Define a threshold for at what magnitude is a point considered a looming point
-    looming_threshold = 4.0
+    looming_threshold = 10.0
     
     # filter the magnitude 2D list using the looming threshold
     looming_mask = magnitude > looming_threshold
@@ -77,8 +76,40 @@ def detect_looming_towards(flow):
     # if looming is approaching count the number of looming points and return it
     if mean_magnitude > approach_threshold:
         looming = sum(map(sum, looming_mask))
-        output = looming
-    return output
+        direction, mean_angle_deg = find_direction_of_looming(magnitude, angle, looming_threshold)
+        print(f"The average direction of the looming is {direction}")
+
+    return looming, direction
+
+def crop(frame):
+    height, width, x= frame.shape
+    top_left_y = int(height * 0.40)  # Crop off top 25%
+    bottom_right_y = int(height * 0.90)  # Crop off bottom 25%
+    top_left_x = 0  # Start at the left edge
+    bottom_right_x = width  # End at the right edge
+    # Crop the image
+    cropped_image = frame[top_left_y:bottom_right_y, top_left_x:bottom_right_x]
+    return cropped_image
+
+def find_direction_of_looming(magnitude, angle, threshold):
+    mask = magnitude < threshold
+    angle[mask] = None
+    direction = ""
+    color = 2 # blue
+    angle_deg = np.degrees(angle)
+
+    mean_angle_deg = np.nanmean(angle_deg)
+    if np.isnan(mean_angle_deg):
+        direction = "none"
+        color = 2 # green
+    else:
+        if (mean_angle_deg > 270 or mean_angle_deg <= 90):
+            direction = "Right"
+            color = 0 # red
+        elif (mean_angle_deg > 90 and mean_angle_deg <= 270):
+            direction = "Left"
+            color = 120 # blue
+    return direction, color
 
 
 
@@ -93,8 +124,8 @@ class OpticalFlowNode:
         self.left_camera_sub = rospy.Subscriber('/miro/sensors/caml/compressed', CompressedImage, self.left_image_callback)
         self.right_camera_sub = rospy.Subscriber('/miro/sensors/camr/compressed', CompressedImage, self.right_image_callback)
         #self.looming_pub = rospy.Publisher('/looming', String, queue_size=1)
-        self.optical_flowl_pub = rospy.Publisher('/optical_flowl', Image, queue_size=0)
-        self.optical_flowr_pub = rospy.Publisher('/optical_flowr', Image, queue_size=0)
+        #self.optical_flowl_pub = rospy.Publisher('/optical_flowl', Image, queue_size=0)
+        #self.optical_flowr_pub = rospy.Publisher('/optical_flowr', Image, queue_size=0)
         self.state = 0
         topic_base_name = "/" + os.getenv("MIRO_ROBOT_NAME")
         self.vel_pub  = rospy.Publisher(
@@ -103,6 +134,8 @@ class OpticalFlowNode:
         self.rate = rospy.Rate(10) # 10 Hz
         self.looming_right=0
         self.looming_left=0
+        self.looming_dir_right=""
+        self.looming_dir_left=""
         print("initialising")
 
 
@@ -129,16 +162,15 @@ class OpticalFlowNode:
 
 
 
-
     def left_image_callback(self, msg):
         """
         Handle the counting of 'looming points' in the left camera
         """
         # get the current frame from imgmsg
         current_frame = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        
+        current_frame_cropped = crop(current_frame)
         # convert color image to grayscale
-        current_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
+        current_gray = cv2.cvtColor(current_frame_cropped, cv2.COLOR_BGR2GRAY)
 
         # Check if we have a previous frame
         if self.prev_frame_left is not None:
@@ -146,9 +178,10 @@ class OpticalFlowNode:
             optical_flow = cv2.calcOpticalFlowFarneback(
                 self.prev_frame_left, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
             
-            optical_flow_img = draw_movement(optical_flow, current_frame)
-            self.optical_flowl_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, "bgr8"))
-            self.looming_left = detect_looming_towards(optical_flow)
+            magnitude, angle = cv2.cartToPolar(optical_flow[..., 0], optical_flow[..., 1])
+            #optical_flow_img = draw_movement(optical_flow, current_frame_cropped)
+            #self.optical_flowl_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, "bgr8"))
+            self.looming_left, self.looming_dir_left = detect_looming_and_looming_direction(magnitude, angle)
             
         # Store the current frame for the next iteration
         self.prev_frame_left = current_gray
@@ -162,9 +195,9 @@ class OpticalFlowNode:
         """
         # get the current frame from imgmsg
         current_frame = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        
+        current_frame_cropped = crop(current_frame)
         # convert color image to grayscale
-        current_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
+        current_gray = cv2.cvtColor(current_frame_cropped, cv2.COLOR_BGR2GRAY)
 
         # Check if we have a previous frame
         if self.prev_frame_right is not None:
@@ -172,9 +205,10 @@ class OpticalFlowNode:
             optical_flow = cv2.calcOpticalFlowFarneback(
                 self.prev_frame_right, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
             
-            optical_flow_img = draw_movement(optical_flow, current_frame)
-            self.optical_flowr_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, "bgr8"))
-            self.looming_right = detect_looming_towards(optical_flow)
+            magnitude, angle = cv2.cartToPolar(optical_flow[..., 0], optical_flow[..., 1])
+            #optical_flow_img = draw_movement(optical_flow, current_frame_cropped)
+            #self.optical_flowr_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, "bgr8"))
+            self.looming_right, self.looming_dir_right = detect_looming_and_looming_direction(magnitude, angle)
             
         # Store the current frame for the next iteration
         self.prev_frame_right = current_gray
@@ -187,35 +221,34 @@ class OpticalFlowNode:
         Check for approaching looming and direction of looming and handle movement
         """
 
-        # calculate total looming and print all the looming values
-        total_looming = self.looming_left + self.looming_right
-        print(f"left: {self.looming_left}")
-        print(f"right: {self.looming_right}")
-        print(total_looming)
-
-        if self.state == 0:
+        if self.state == 0: # looming detection state
             print("detecting looming...")
+             # calculate total looming and print all the looming values
+            difference_percentage = 0.1
+            total_looming = self.looming_left + self.looming_right
+            difference = total_looming * difference_percentage
+            #print(f"left: {self.looming_left}, right: {self.looming_right}, total {total_looming}")
             if total_looming > 0:
-                if self.looming_left < self.looming_right:    
-                    #self.looming_pub.publish("Something approaches from the left")
-                    print("looming left - turning")
+                if (self.looming_left - self.looming_right) > difference and self.looming_dir_left == "Right" and self.looming_dir_right == "Right":    
                     self.state = 1
-                elif self.looming_right > self.looming_left:
-                    #self.looming_pub.publish("Something approaches from the right")
-                    print("looming right - turning")
+                elif (self.looming_right - self.looming_left) > difference and self.looming_dir_left == "Left" and self.looming_dir_right == "Left":
                     self.state = 2
             else:
-                #self.looming_pub.publish("No looming detected")
                 print("no looming - moving forward")
-                self.state = 0
-        
-        if self.state == 0:
-            self.drive(0.1,0.1)
-        elif self.state == 1:
-            self.drive(0.1,0.2)
+                #self.drive(0.1,0.1)
+        elif self.state == 1: # turning right state
+            start = time.time()
+            #self.drive(0.0,0.0)
+            while time.time() - start < 0.5:
+                print("looming left - turning right")
+                #self.drive(0.1,0.05)
             self.state = 0
-        elif self.state == 2:
-            self.drive(0.2,0.1)
+        elif self.state == 2: # turning left state
+            start = time.time()
+            #self.drive(0.0,0.0)
+            while time.time() - start < 0.5:
+                print("looming right - turning right")
+                #self.drive(0.05,0.1)
             self.state = 0
 
 if __name__ == '__main__':
