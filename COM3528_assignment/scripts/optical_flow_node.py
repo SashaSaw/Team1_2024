@@ -253,6 +253,9 @@ class OpticalFlowNode:
                 elif looming_dir_left == "Left" and looming_dir_right == "Right" and total_looming > 10000:
                     self.state = 3
                     print("looming IN FRONT turning random direction")
+                else:
+                    self.state = 0
+                    self.drive(0.15, 0.15)
             elif total_looming < 1000 and looming_dir_left == "" and looming_dir_right == "":
                 print("no looming - moving forward")
                 self.drive(0.15,0.15)
