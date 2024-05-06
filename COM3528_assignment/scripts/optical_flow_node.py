@@ -16,7 +16,7 @@ try:  # For convenience, import this util separately
 except ImportError:
     from miro2.utils import wheel_speed2cmd_vel  # Python 2
 
-def draw_flow(img, flow, step=16):
+def draw_flow(flow, img, step=16):
     """
     draw the flow arrows over an image and return the edited image
     """
@@ -45,7 +45,7 @@ def draw_movement(flow, frame):
     # get the magnitudes and angles of the flow
     magnitude, angle = cv2.cartToPolar(flow[...,0],flow[...,1])
     # Define a threshold for at what magnitude is a point considered a looming point
-    threshold= 3.0
+    threshold= 5.0
     # filter the magnitude 2D list using the looming threshold
     looming_mask = magnitude > threshold
     # store the value for red in the picture where there are 'looming points'
@@ -68,7 +68,7 @@ def detect_looming_and_looming_direction(magnitude, angle):
     approach_threshold = 2.5
     
     # Define a threshold for at what magnitude is a point considered a looming point
-    looming_threshold = 3.0
+    looming_threshold = 5.0
     
     # filter the magnitude 2D list using the looming threshold
     looming_mask = magnitude > looming_threshold
@@ -134,8 +134,8 @@ class OpticalFlowNode:
         self.left_camera_sub = rospy.Subscriber('/miro/sensors/caml/compressed', CompressedImage, self.left_image_callback)
         self.right_camera_sub = rospy.Subscriber('/miro/sensors/camr/compressed', CompressedImage, self.right_image_callback)
         #self.looming_pub = rospy.Publisher('/looming', String, queue_size=1)
-        #self.optical_flowl_pub = rospy.Publisher('/optical_flowl', Image, queue_size=0)
-        #self.optical_flowr_pub = rospy.Publisher('/optical_flowr', Image, queue_size=0)
+        self.optical_flowl_pub = rospy.Publisher('/optical_flowl', Image, queue_size=0)
+        self.optical_flowr_pub = rospy.Publisher('/optical_flowr', Image, queue_size=0)
         self.state = 0
         topic_base_name = "/" + os.getenv("MIRO_ROBOT_NAME")
         self.vel_pub  = rospy.Publisher(topic_base_name + "/control/cmd_vel", TwistStamped, queue_size=0)
@@ -173,18 +173,15 @@ class OpticalFlowNode:
         """
         # get the current frame from imgmsg
         current_frame = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        current_frame_cropped = cropleft(current_frame)
+        self.current_frame_croppedl = cropleft(current_frame)
         # convert color image to grayscale
-        current_gray = cv2.cvtColor(current_frame_cropped, cv2.COLOR_BGR2GRAY)
+        current_gray = cv2.cvtColor(self.current_frame_croppedl, cv2.COLOR_BGR2GRAY)
 
         # Check if we have a previous frame
         if self.prev_frame_left is not None and self.state == 0:
             # Calculate optical flow using Lucas-Kanade method
             self.flow_left = cv2.calcOpticalFlowFarneback(
                 self.prev_frame_left, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-            
-            #optical_flow_img = draw_movement(optical_flow_left, current_frame_cropped)
-            #self.optical_flowl_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, "bgr8"))
             
         # Store the current frame for the next iteration
         self.prev_frame_left = current_gray
@@ -198,9 +195,9 @@ class OpticalFlowNode:
         """
         # get the current frame from imgmsg
         current_frame = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        current_frame_cropped = cropright(current_frame)
+        self.current_frame_croppedr = cropright(current_frame)
         # convert color image to grayscale
-        current_gray = cv2.cvtColor(current_frame_cropped, cv2.COLOR_BGR2GRAY)
+        current_gray = cv2.cvtColor(self.current_frame_croppedr, cv2.COLOR_BGR2GRAY)
 
         # Check if we have a previous frame
         if self.prev_frame_right is not None and self.state == 0:
@@ -210,7 +207,7 @@ class OpticalFlowNode:
             
         # Store the current frame for the next iteration
         self.prev_frame_right = current_gray
-        self.compare_and_publish()
+        #self.compare_and_publish()
 
 
 
@@ -223,59 +220,96 @@ class OpticalFlowNode:
         looming_right = 0
         looming_dir_left = ""
         looming_dir_right = ""
-        print(f"directionL : {self.looming_dir_left} directionR : {self.looming_dir_right}")
         if self.state == 0: # looming detection state
-            mag_left, ang_left = cv2.cartToPolar(self.flow_left[..., 0], self.flow_left[..., 1])
-            looming_left, looming_dir_left = detect_looming_and_looming_direction(mag_left, ang_left)
-            mag_right, ang_right = cv2.cartToPolar(self.flow_right[..., 0], self.flow_right[..., 1])
-            looming_right, looming_dir_right = detect_looming_and_looming_direction(mag_right, ang_right)
-            #print("detecting looming...")
-             # calculate total looming and print all the looming values
+            #self.drive(0.0, 0.0)
+            print ("Detecting looming...")
+            if self.flow_left is not None and self.flow_right is not None:
+                mag_left, ang_left = cv2.cartToPolar(self.flow_left[..., 0], self.flow_left[..., 1])
+                looming_left, looming_dir_left = detect_looming_and_looming_direction(mag_left, ang_left)
+                mag_right, ang_right = cv2.cartToPolar(self.flow_right[..., 0], self.flow_right[..., 1])
+                looming_right, looming_dir_right = detect_looming_and_looming_direction(mag_right, ang_right)
+
+                optical_flow_img1 = draw_flow(self.flow_left, self.prev_frame_left)
+                self.optical_flowl_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img1, "bgr8"))
+
+                optical_flow_img2 = draw_flow(self.flow_right, self.prev_frame_right)
+                self.optical_flowr_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img2, "bgr8"))
+            if looming_dir_right == looming_dir_left:
+                looming_dir_left = ""
+                looming_dir_right = ""
+            # calculate total looming and print all the looming values
             difference_percentage = 0.5
             total_looming = looming_left + looming_right
             difference = total_looming * difference_percentage
-            #print(f"left: {looming_left}, right: {looming_right}, total {total_looming}")
-            if total_looming > 0:
+            print(f"left: {looming_left}, right: {looming_right}, total {total_looming}")
+            print(f"directions:                                                                     {looming_dir_left}                                  {looming_dir_right}")
+            if total_looming > 1000:
                 if (looming_left - looming_right) > difference and looming_dir_left == "Left" and looming_dir_right == "":
                     self.state = 1
-                    #print("looming direciton left in left camera only")
+                    print("looming detected going LEFT")
                 elif (looming_right - looming_left) > difference and looming_dir_right == "Right" and looming_dir_left == "":
                     self.state = 2
-                    #print("looming direction right in right camera only")
+                    print("looming detected going RIGHT")
                 elif looming_dir_left == "Left" and looming_dir_right == "Right" and total_looming > 10000:
-                    self.state = 2
-                    print("IN FRONT turning random direction")
-            else:
-                #print("no looming - moving forward")
+                    self.state = 3
+                    print("looming IN FRONT turning random direction")
+            elif total_looming < 1000 and looming_dir_left == "" and looming_dir_right == "":
+                print("no looming - moving forward")
                 self.drive(0.15,0.15)
+                self.state = 0
+            else:
+                self.drive(0.0,0.0)
+                self.state = 0
+
         elif self.state == 1: # turning right state
             start = time.time()
-            print("turning right")
+            print("starting turning right...")
             #turn right fast
-            while time.time() - start < 1:
+            while time.time() - start < 0.5:
                 self.drive(0.2,0.05)
             #turn right a bit slower
             while time.time() - start < 0.5:
                 self.drive(0.1,0.05)
-            self.state = 3
+            while time.time() - start < 0.1:
+                self.drive(0.0,0.0)
+            print("finished turning right") 
+            self.state = 4
+
         elif self.state == 2: # turning left state
             start = time.time()
-            print("turning left")
+            print("starting turning left")
             #turn left fast
-            while time.time() - start < 1:
+            while time.time() - start < 0.5:
                 self.drive(0.05,0.2)
             #turn left slower
             while time.time() - start < 0.5:
                 self.drive(0.05,0.1)
-            self.state = 3
-        elif self.state == 3: # stay still for 0.5s
+            while time.time() - start < 0.1:
+                self.drive(0.05,0.1)
+            print("finished turning left")
+            self.state = 4
+
+        elif self.state == 3: # turning left state
             start = time.time()
-            while time.time() - start < 3:
+            print("reversing...")
+            #turn left fast
+            while time.time() - start < 1:
+                self.drive(-0.1,-0.1)
+            print("stopped reversing... now turning...")
+            #turn left slower
+            while time.time() - start < 0.5:
+                self.drive(0.05,0.1)
+            while time.time() - start < 0.5:
                 self.drive(0.0,0.0)
-                looming_left = 0
-                looming_right = 0
-                looming_dir_left = ""
-                looming_dir_right = ""
+            print("stopped turning")
+            self.state = 4
+
+        elif self.state == 4: # stay still for 0.5s
+            self.drive(0.0,0.0)
+            looming_left = 0
+            looming_right = 0
+            looming_dir_left = ""
+            looming_dir_right = ""
             self.state = 0
 
 if __name__ == '__main__':
