@@ -220,6 +220,7 @@ class OpticalFlowNode:
         looming_right = 0
         looming_dir_left = ""
         looming_dir_right = ""
+        
         if self.state == 0: # looming detection state
             #self.drive(0.0, 0.0)
             print ("Detecting looming...")
@@ -271,7 +272,7 @@ class OpticalFlowNode:
             while time.time() - start < 0.5:
                 self.drive(0.2,0.05)
             #turn right a bit slower
-            while time.time() - start < 0.5:
+            while time.time() - start < 0.2:
                 self.drive(0.1,0.05)
             while time.time() - start < 0.1:
                 self.drive(0.0,0.0)
@@ -285,7 +286,7 @@ class OpticalFlowNode:
             while time.time() - start < 0.5:
                 self.drive(0.05,0.2)
             #turn left slower
-            while time.time() - start < 0.5:
+            while time.time() - start < 0.2:
                 self.drive(0.05,0.1)
             while time.time() - start < 0.1:
                 self.drive(0.05,0.1)
@@ -297,11 +298,11 @@ class OpticalFlowNode:
             print("reversing...")
             #turn left fast
             while time.time() - start < 1:
-                self.drive(-0.1,-0.1)
+                self.drive(-0.05,-0.05)
             print("stopped reversing... now turning...")
             #turn left slower
             while time.time() - start < 0.5:
-                self.drive(0.05,0.1)
+                self.drive(0.05,0.2)
             while time.time() - start < 0.5:
                 self.drive(0.0,0.0)
             print("stopped turning")
