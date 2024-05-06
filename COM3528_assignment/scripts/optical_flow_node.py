@@ -138,14 +138,9 @@ class OpticalFlowNode:
         #self.optical_flowr_pub = rospy.Publisher('/optical_flowr', Image, queue_size=0)
         self.state = 0
         topic_base_name = "/" + os.getenv("MIRO_ROBOT_NAME")
-        self.vel_pub  = rospy.Publisher(
-            topic_base_name + "/control/cmd_vel", TwistStamped, queue_size=0
-        )
-        self.rate = rospy.Rate(10) # 10 Hz
-        self.looming_right=0
-        self.looming_left=0
-        self.looming_dir_right=""
-        self.looming_dir_left=""
+        self.vel_pub  = rospy.Publisher(topic_base_name + "/control/cmd_vel", TwistStamped, queue_size=0)
+        self.flow_left = None
+        self.flow_right = None
         print("initialising")
 
 
@@ -185,13 +180,11 @@ class OpticalFlowNode:
         # Check if we have a previous frame
         if self.prev_frame_left is not None and self.state == 0:
             # Calculate optical flow using Lucas-Kanade method
-            optical_flow_left = cv2.calcOpticalFlowFarneback(
+            self.flow_left = cv2.calcOpticalFlowFarneback(
                 self.prev_frame_left, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
             
-            magnitude, angle = cv2.cartToPolar(optical_flow_left[..., 0], optical_flow_left[..., 1])
             #optical_flow_img = draw_movement(optical_flow_left, current_frame_cropped)
             #self.optical_flowl_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, "bgr8"))
-            self.looming_left, self.looming_dir_left = detect_looming_and_looming_direction(magnitude, angle)
             
         # Store the current frame for the next iteration
         self.prev_frame_left = current_gray
@@ -212,13 +205,8 @@ class OpticalFlowNode:
         # Check if we have a previous frame
         if self.prev_frame_right is not None and self.state == 0:
             # Calculate optical flow using Lucas-Kanade method
-            optical_flow_right = cv2.calcOpticalFlowFarneback(
+            self.flow_right = cv2.calcOpticalFlowFarneback(
                 self.prev_frame_right, current_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-            
-            magnitude, angle = cv2.cartToPolar(optical_flow_right[..., 0], optical_flow_right[..., 1])
-            #optical_flow_img = draw_movement(optical_flow_right, current_frame_cropped)
-            #self.optical_flowr_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img, "bgr8"))
-            self.looming_right, self.looming_dir_right = detect_looming_and_looming_direction(magnitude, angle)
             
         # Store the current frame for the next iteration
         self.prev_frame_right = current_gray
@@ -231,55 +219,63 @@ class OpticalFlowNode:
         Check for approaching looming and direction of looming and handle movement
         """
         print(self.state)
+        looming_left = 0
+        looming_right = 0
+        looming_dir_left = ""
+        looming_dir_right = ""
         print(f"directionL : {self.looming_dir_left} directionR : {self.looming_dir_right}")
         if self.state == 0: # looming detection state
+            mag_left, ang_left = cv2.cartToPolar(self.flow_left[..., 0], self.flow_left[..., 1])
+            looming_left, looming_dir_left = detect_looming_and_looming_direction(mag_left, ang_left)
+            mag_right, ang_right = cv2.cartToPolar(self.flow_right[..., 0], self.flow_right[..., 1])
+            looming_right, looming_dir_right = detect_looming_and_looming_direction(mag_right, ang_right)
             #print("detecting looming...")
              # calculate total looming and print all the looming values
             difference_percentage = 0.5
-            total_looming = self.looming_left + self.looming_right
+            total_looming = looming_left + looming_right
             difference = total_looming * difference_percentage
-            #print(f"left: {self.looming_left}, right: {self.looming_right}, total {total_looming}")
+            #print(f"left: {looming_left}, right: {looming_right}, total {total_looming}")
             if total_looming > 0:
-                #if self.looming_dir_left == "Right" and self.looming_dir_right == "Right":    
-                #    self.state = 2
-                #    print("direction right in both")
-                #elif self.looming_dir_left == "Left" and self.looming_dir_right == "Left":
-                #    self.state = 1
-                 #   print("direction left in both")
-                if (self.looming_left - self.looming_right) > difference and self.looming_dir_left == "Left" and self.looming_dir_right == "":
+                if (looming_left - looming_right) > difference and looming_dir_left == "Left" and looming_dir_right == "":
                     self.state = 1
                     #print("looming direciton left in left camera only")
-                elif (self.looming_right - self.looming_left) > difference and self.looming_dir_right == "Right" and self.looming_dir_left == "":
+                elif (looming_right - looming_left) > difference and looming_dir_right == "Right" and looming_dir_left == "":
                     self.state = 2
                     #print("looming direction right in right camera only")
+                elif looming_dir_left == "Left" and looming_dir_right == "Right" and total_looming > 10000:
+                    self.state = 2
+                    print("IN FRONT turning random direction")
             else:
                 #print("no looming - moving forward")
                 self.drive(0.15,0.15)
         elif self.state == 1: # turning right state
             start = time.time()
             print("turning right")
+            #turn right fast
             while time.time() - start < 1:
                 self.drive(0.2,0.05)
+            #turn right a bit slower
             while time.time() - start < 0.5:
                 self.drive(0.1,0.05)
             self.state = 3
         elif self.state == 2: # turning left state
             start = time.time()
             print("turning left")
+            #turn left fast
             while time.time() - start < 1:
                 self.drive(0.05,0.2)
+            #turn left slower
             while time.time() - start < 0.5:
                 self.drive(0.05,0.1)
             self.state = 3
         elif self.state == 3: # stay still for 0.5s
             start = time.time()
-            #print("turning left")
             while time.time() - start < 3:
                 self.drive(0.0,0.0)
-                self.looming_left = 0
-                self.looming_right = 0
-                self.looming_dir_left = ""
-                self.looming_dir_right = ""
+                looming_left = 0
+                looming_right = 0
+                looming_dir_left = ""
+                looming_dir_right = ""
             self.state = 0
 
 if __name__ == '__main__':
