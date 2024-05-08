@@ -53,11 +53,54 @@ def draw_movement(flow, frame):
     return frame
 
 
+def find_avg_angle (flow, threshold, step=16):
+    h,w = flow.shape[:2]
+    h, w = flow.shape[:2]
+    y, x = np.mgrid[step / 2:h:step, step / 2:w:step].reshape(2, -1).astype(int)
+    fx, fy = flow[y, x].T
 
-def detect_looming_and_looming_direction(magnitude, angle):
+    # Calculate the magnitude of each vector
+    magnitudes = np.sqrt(fx ** 2 + fy ** 2)
+
+    # Avoid division by zero in case of zero-length vectors
+    nonzero = magnitudes > threshold
+    normalized_fx = np.zeros_like(fx)
+    normalized_fy = np.zeros_like(fy)
+
+    # Normalize only non-zero vectors
+    normalized_fx[nonzero] = fx[nonzero] / magnitudes[nonzero]
+    normalized_fy[nonzero] = fy[nonzero] / magnitudes[nonzero]
+
+    # Compute the average direction
+    average_fx = np.mean(normalized_fx)
+    average_fy = np.mean(normalized_fy)
+
+    # Optionally, convert average direction to an angle
+    average_angle = np.arctan2(average_fy, average_fx)  # Result in radians
+    average_angle_degrees = np.degrees(average_angle)  # Convert to degrees if needed
+    print(average_angle_degrees)
+    return average_angle_degrees
+
+def find_direction_from_angle(avg_angle):
+    #print(mean_angle_deg)
+    if avg_angle == 0:
+        direction = "none"
+        color = 2 # green
+    else:
+        if (avg_angle > 270 or avg_angle <= 90):
+            direction = "Right"
+            color = 0 # red
+        elif (avg_angle > 90 and avg_angle <= 270):
+            direction = "Left"
+            color = 120 # blue
+    return direction, color
+
+
+def detect_looming_and_looming_direction(flow):
     """
     detect points where there is looming when there is 'approaching looming' and return number of looming points
     """
+    magnitude, angle = cv2.cartToPolar(flow[...,0],flow[...,1])
     looming = 0
     direction = ""
     
@@ -76,7 +119,8 @@ def detect_looming_and_looming_direction(magnitude, angle):
     # if looming is approaching count the number of looming points and return it
     if mean_magnitude > approach_threshold:
         looming = sum(map(sum, looming_mask))
-        direction, mean_angle_deg = find_direction_of_looming(magnitude, angle, looming_threshold)
+        avg_angle = find_avg_angle(flow, looming_threshold)
+        direction = find_direction_from_angle(avg_angle)
         #print(f"The average direction of the looming is {direction}")
 
     return looming, direction
@@ -100,7 +144,7 @@ def cropright(frame):
     # Crop the image
     cropped_image = frame[top_left_y:bottom_right_y, top_left_x:bottom_right_x]
     return cropped_image
-
+"""
 def find_direction_of_looming(magnitude, angle, threshold):
     mask = magnitude < threshold
     angle[mask] = None
@@ -120,7 +164,7 @@ def find_direction_of_looming(magnitude, angle, threshold):
             direction = "Left"
             color = 120 # blue
     return direction, color
-
+"""
 
 
 class OpticalFlowNode:
@@ -216,19 +260,13 @@ class OpticalFlowNode:
         Check for approaching looming and direction of looming and handle movement
         """
         print(self.state)
-        looming_left = 0
-        looming_right = 0
-        looming_dir_left = ""
-        looming_dir_right = ""
         
         if self.state == 0: # looming detection state
             #self.drive(0.0, 0.0)
             print ("Detecting looming...")
             if self.flow_left is not None and self.flow_right is not None:
-                mag_left, ang_left = cv2.cartToPolar(self.flow_left[..., 0], self.flow_left[..., 1])
-                looming_left, looming_dir_left = detect_looming_and_looming_direction(mag_left, ang_left)
-                mag_right, ang_right = cv2.cartToPolar(self.flow_right[..., 0], self.flow_right[..., 1])
-                looming_right, looming_dir_right = detect_looming_and_looming_direction(mag_right, ang_right)
+                looming_left, looming_dir_left = detect_looming_and_looming_direction(self.flow_left)
+                looming_right, looming_dir_right = detect_looming_and_looming_direction(self.flow_right)
 
                 optical_flow_img1 = draw_flow(self.flow_left, self.prev_frame_left)
                 self.optical_flowl_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img1, "bgr8"))
@@ -245,10 +283,10 @@ class OpticalFlowNode:
             print(f"left: {looming_left}, right: {looming_right}, total {total_looming}")
             print(f"directions:                                                                     {looming_dir_left}                                  {looming_dir_right}")
             if total_looming > 1000:
-                if (looming_left - looming_right) > difference and looming_dir_left == "Left" and looming_dir_right == "":
+                if (looming_left - looming_right) > difference and looming_dir_left == "Left" and looming_dir_right == "none":
                     self.state = 1
                     print("looming detected going LEFT")
-                elif (looming_right - looming_left) > difference and looming_dir_right == "Right" and looming_dir_left == "":
+                elif (looming_right - looming_left) > difference and looming_dir_right == "Right" and looming_dir_left == "none":
                     self.state = 2
                     print("looming detected going RIGHT")
                 elif looming_dir_left == "Left" and looming_dir_right == "Right" and total_looming > 10000:
@@ -257,7 +295,7 @@ class OpticalFlowNode:
                 else:
                     self.state = 0
                     self.drive(0.15, 0.15)
-            elif total_looming < 1000 and looming_dir_left == "" and looming_dir_right == "":
+            elif total_looming < 1000 and looming_dir_left == "none" and looming_dir_right == "none":
                 print("no looming - moving forward")
                 self.drive(0.15,0.15)
                 self.state = 0
@@ -312,8 +350,8 @@ class OpticalFlowNode:
             self.drive(0.0,0.0)
             looming_left = 0
             looming_right = 0
-            looming_dir_left = ""
-            looming_dir_right = ""
+            looming_dir_left = "none"
+            looming_dir_right = "none"
             self.state = 0
 
 if __name__ == '__main__':
