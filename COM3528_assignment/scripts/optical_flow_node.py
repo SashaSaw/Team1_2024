@@ -53,7 +53,7 @@ def draw_movement(flow, frame):
     return frame
 
 
-def find_avg_angle (flow, threshold, step=16):
+def find_avg_angle (flow, threshold, step):
     h,w = flow.shape[:2]
     h, w = flow.shape[:2]
     y, x = np.mgrid[step / 2:h:step, step / 2:w:step].reshape(2, -1).astype(int)
@@ -93,37 +93,41 @@ def find_direction_from_angle(avg_angle):
         elif (avg_angle > 90 and avg_angle <= 270):
             direction = "Left"
             color = 120 # blue
-    return direction, color
+    return direction
 
 
-def detect_looming_and_looming_direction(flow):
+def detect_looming_and_looming_direction(flow, step=16):
     """
     detect points where there is looming when there is 'approaching looming' and return number of looming points
     """
-    magnitude, angle = cv2.cartToPolar(flow[...,0],flow[...,1])
+    h,w = flow.shape[:2]
+    h, w = flow.shape[:2]
+    y, x = np.mgrid[step / 2:h:step, step / 2:w:step].reshape(2, -1).astype(int)
+    fx, fy = flow[y, x].T
+
+    # Calculate the magnitude of each vector
+    magnitudes = np.sqrt(fx ** 2 + fy ** 2)
     looming = 0
-    direction = ""
+    direction = "none"
     
     # Calculate mean magnitude to determine if the object is moving closer or expanding
-    mean_magnitude = np.mean(magnitude)
-    #print(f"mean_magnitude: {mean_magnitude}")
+    mean_magnitude = np.mean(magnitudes)
     # Define a threshold for what is considered an "approach"
-    approach_threshold = 2.5
+    approach_threshold = 5.0
     
     # Define a threshold for at what magnitude is a point considered a looming point
     looming_threshold = 5.0
     
-    # filter the magnitude 2D list using the looming threshold
-    looming_mask = magnitude > looming_threshold
     
     # if looming is approaching count the number of looming points and return it
     if mean_magnitude > approach_threshold:
-        looming = sum(map(sum, looming_mask))
-        avg_angle = find_avg_angle(flow, looming_threshold)
+        print("approaching")
+        looming = np.sum(magnitudes > approach_threshold)
+        avg_angle = find_avg_angle(flow, looming_threshold, step)
         direction = find_direction_from_angle(avg_angle)
         #print(f"The average direction of the looming is {direction}")
 
-    return looming, direction
+    return looming, direction, mean_magnitude
 
 def cropleft(frame):
     height, width, x= frame.shape
@@ -173,16 +177,17 @@ class OpticalFlowNode:
         node_name = "optical_flow_node"
         rospy.init_node(node_name, anonymous=True)
         self.bridge = CvBridge()
-        self.prev_frame_left = None
-        self.prev_frame_right = None
         self.left_camera_sub = rospy.Subscriber('/miro/sensors/caml/compressed', CompressedImage, self.left_image_callback)
         self.right_camera_sub = rospy.Subscriber('/miro/sensors/camr/compressed', CompressedImage, self.right_image_callback)
         #self.looming_pub = rospy.Publisher('/looming', String, queue_size=1)
         self.optical_flowl_pub = rospy.Publisher('/optical_flowl', Image, queue_size=0)
         self.optical_flowr_pub = rospy.Publisher('/optical_flowr', Image, queue_size=0)
-        self.state = 0
+        
         topic_base_name = "/" + os.getenv("MIRO_ROBOT_NAME")
         self.vel_pub  = rospy.Publisher(topic_base_name + "/control/cmd_vel", TwistStamped, queue_size=0)
+        self.state = 0
+        self.prev_frame_left = None
+        self.prev_frame_right = None
         self.flow_left = None
         self.flow_right = None
         print("initialising")
@@ -260,36 +265,40 @@ class OpticalFlowNode:
         Check for approaching looming and direction of looming and handle movement
         """
         print(self.state)
-        
+        looming_left = 0
+        looming_right = 0
+        looming_dir_left = "none"
+        looming_dir_right = "none"
+        mean_magnitude_left = 0
+        mean_magnitude_right = 0
         if self.state == 0: # looming detection state
             #self.drive(0.0, 0.0)
             print ("Detecting looming...")
             if self.flow_left is not None and self.flow_right is not None:
-                looming_left, looming_dir_left = detect_looming_and_looming_direction(self.flow_left)
-                looming_right, looming_dir_right = detect_looming_and_looming_direction(self.flow_right)
+                looming_left, looming_dir_left, mean_magnitude_left = detect_looming_and_looming_direction(self.flow_left)
+                looming_right, looming_dir_right, mean_magnitude_right= detect_looming_and_looming_direction(self.flow_right)
 
-                optical_flow_img1 = draw_flow(self.flow_left, self.prev_frame_left)
-                self.optical_flowl_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img1, "bgr8"))
+                #optical_flow_img1 = draw_flow(self.flow_left, self.prev_frame_left)
+                #self.optical_flowl_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img1, "bgr8"))
 
-                optical_flow_img2 = draw_flow(self.flow_right, self.prev_frame_right)
-                self.optical_flowr_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img2, "bgr8"))
-            if looming_dir_right == looming_dir_left:
-                looming_dir_left = ""
-                looming_dir_right = ""
+                #optical_flow_img2 = draw_flow(self.flow_right, self.prev_frame_right)
+                #self.optical_flowr_pub.publish(self.bridge.cv2_to_imgmsg(optical_flow_img2, "bgr8"))
+            #if looming_dir_right == looming_dir_left:
+            #    looming_dir_left = "none"
+            #    looming_dir_right = "none"
+
             # calculate total looming and print all the looming values
-            difference_percentage = 0.5
             total_looming = looming_left + looming_right
-            difference = total_looming * difference_percentage
-            print(f"left: {looming_left}, right: {looming_right}, total {total_looming}")
+            print(f"left: {mean_magnitude_left}, right: {mean_magnitude_right}")
             print(f"directions:                                                                     {looming_dir_left}                                  {looming_dir_right}")
-            if total_looming > 1000:
-                if (looming_left - looming_right) > difference and looming_dir_left == "Left" and looming_dir_right == "none":
+            if total_looming > 100:
+                if mean_magnitude_left > mean_magnitude_right and looming_dir_left == "Left" and looming_dir_right == "none":
                     self.state = 1
                     print("looming detected going LEFT")
-                elif (looming_right - looming_left) > difference and looming_dir_right == "Right" and looming_dir_left == "none":
+                elif mean_magnitude_right > mean_magnitude_left and looming_dir_right == "Right" and looming_dir_left == "none":
                     self.state = 2
                     print("looming detected going RIGHT")
-                elif looming_dir_left == "Left" and looming_dir_right == "Right" and total_looming > 10000:
+                elif np.abs(mean_magnitude_left - mean_magnitude_right) < 0.5 or looming_dir_left == "Left" and looming_dir_right == "Right":
                     self.state = 3
                     print("looming IN FRONT turning random direction")
                 else:
@@ -305,54 +314,55 @@ class OpticalFlowNode:
 
         elif self.state == 1: # turning right state
             start = time.time()
+            
             print("starting turning right...")
             #turn right fast
-            while time.time() - start < 0.5:
-                self.drive(0.2,0.05)
-            #turn right a bit slower
-            while time.time() - start < 0.2:
-                self.drive(0.1,0.05)
-            while time.time() - start < 0.1:
-                self.drive(0.0,0.0)
-            print("finished turning right") 
+            
+            while time.time() - start < 1:
+                self.drive(0.2,0.0)
+                rospy.sleep(0.005)
+            
+            print("finished turning right")
             self.state = 4
 
         elif self.state == 2: # turning left state
             start = time.time()
+
             print("starting turning left")
             #turn left fast
-            while time.time() - start < 0.5:
-                self.drive(0.05,0.2)
-            #turn left slower
-            while time.time() - start < 0.2:
-                self.drive(0.05,0.1)
-            while time.time() - start < 0.1:
-                self.drive(0.05,0.1)
+            while time.time() - start < 1:
+                self.drive(0.0,0.2)
+                rospy.sleep(0.005)
+            
             print("finished turning left")
             self.state = 4
 
-        elif self.state == 3: # turning left state
+        elif self.state == 3: # reverse then turn state
             start = time.time()
+
             print("reversing...")
             #turn left fast
             while time.time() - start < 1:
                 self.drive(-0.05,-0.05)
+                rospy.sleep(0.005)
+            
+            start = time.time()
             print("stopped reversing... now turning...")
             #turn left slower
-            while time.time() - start < 0.5:
+            while time.time() - start < 1:
                 self.drive(0.05,0.2)
-            while time.time() - start < 0.5:
-                self.drive(0.0,0.0)
+                rospy.sleep(0.005)
+            
             print("stopped turning")
             self.state = 4
 
         elif self.state == 4: # stay still for 0.5s
             self.drive(0.0,0.0)
-            looming_left = 0
-            looming_right = 0
-            looming_dir_left = "none"
-            looming_dir_right = "none"
             self.state = 0
+            self.prev_frame_left = None
+            self.prev_frame_right = None
+            self.flow_left = None
+            self.flow_right = None
 
 if __name__ == '__main__':
     try:
