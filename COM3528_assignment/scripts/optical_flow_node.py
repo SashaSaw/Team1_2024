@@ -248,6 +248,33 @@ class OpticalFlowNode:
         # Store the current frame for the next iteration
         self.prev_frame_right = current_gray
 
+    def get_next_state(self, mean_magnitude_left, mean_magnitude_right, total_looming, looming_dir_left, looming_dir_right):
+        """
+        handle the decision for the next state and set the nodes state to what state is decided
+        """
+        print(f"left: {mean_magnitude_left}, right: {mean_magnitude_right}")
+        print(f"directions:                                                                     {looming_dir_left}                                  {looming_dir_right}")
+        if total_looming > 100:
+            if mean_magnitude_left > mean_magnitude_right and looming_dir_left == "Left" and looming_dir_right == "none":
+                self.state = 1 # set to turning right state
+                print("looming detected going LEFT")
+            elif mean_magnitude_right > mean_magnitude_left and looming_dir_right == "Right" and looming_dir_left == "none":
+                self.state = 2 # set to turning left state
+                print("looming detected going RIGHT")
+            elif np.abs(mean_magnitude_left - mean_magnitude_right) < 0.5 or looming_dir_left == "Left" and looming_dir_right == "Right":
+                self.state = 3 # set to reverse state
+                print("looming IN FRONT turning random direction")
+            else:
+                self.state = 0 # just set the state back to 0 (if conditions aren't met)
+                self.drive(0.15, 0.15)
+        elif total_looming < 1000 and looming_dir_left == "none" and looming_dir_right == "none":
+            print("no looming - moving forward")
+            self.drive(0.15,0.15)
+            self.state = 0
+        else:
+            self.drive(0.0,0.0)
+            self.state = 0
+
 
 
     def compare_and_publish(self):
@@ -268,31 +295,11 @@ class OpticalFlowNode:
             if self.flow_left is not None and self.flow_right is not None:
                 looming_left, looming_dir_left, mean_magnitude_left = detect_looming_and_looming_direction(self.flow_left)
                 looming_right, looming_dir_right, mean_magnitude_right= detect_looming_and_looming_direction(self.flow_right)
-            
+
             # calculate total looming and print all the looming values
             total_looming = looming_left + looming_right
-            print(f"left: {mean_magnitude_left}, right: {mean_magnitude_right}")
-            print(f"directions:                                                                     {looming_dir_left}                                  {looming_dir_right}")
-            if total_looming > 100:
-                if mean_magnitude_left > mean_magnitude_right and looming_dir_left == "Left" and looming_dir_right == "none":
-                    self.state = 1 # set to turning right state
-                    print("looming detected going LEFT")
-                elif mean_magnitude_right > mean_magnitude_left and looming_dir_right == "Right" and looming_dir_left == "none":
-                    self.state = 2 # set to turning left state
-                    print("looming detected going RIGHT")
-                elif np.abs(mean_magnitude_left - mean_magnitude_right) < 0.5 or looming_dir_left == "Left" and looming_dir_right == "Right":
-                    self.state = 3 # set to reverse state
-                    print("looming IN FRONT turning random direction")
-                else:
-                    self.state = 0 # just set the state back to 0 (if conditions aren't met)
-                    self.drive(0.15, 0.15)
-            elif total_looming < 1000 and looming_dir_left == "none" and looming_dir_right == "none":
-                print("no looming - moving forward")
-                self.drive(0.15,0.15)
-                self.state = 0
-            else:
-                self.drive(0.0,0.0)
-                self.state = 0
+
+            self.set_next_state(mean_magnitude_left, mean_magnitude_right, total_looming, looming_dir_left, looming_dir_right)
 
         elif self.state == 1: # turning right state
             start = time.time()
