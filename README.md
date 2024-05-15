@@ -12,3 +12,16 @@ To run this project you can simply:
 4. Run roscore in a terminal
 5. Navigate to directory Team1_2024/COM3528_assignment/scripts
 6. run python3 optical_flow_node.py
+
+# Installing the requirements
+
+You should not need to install these requirements. Running python3 optical_flow_node.py should just work.
+However if you get errors saying that you do not have some of the packages in the requirements then simply follow the instructions below to install them onto a virtual environment.
+
+1. pip install virtualenv (if you don't already have virtualenv installed)
+
+2. virtualenv <name of env> (to create your new environment)
+
+3. source <name of env>/bin/activate (to enter the environement)
+
+4. pip install -r requirements.txt
