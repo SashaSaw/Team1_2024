@@ -247,7 +247,7 @@ class OpticalFlowNode:
         # Store the current frame for the next iteration
         self.prev_frame_right = current_gray
 
-    def get_next_state(self, mean_magnitude_left, mean_magnitude_right, total_looming, looming_dir_left, looming_dir_right):
+    def set_next_state(self, mean_magnitude_left, mean_magnitude_right, total_looming, looming_dir_left, looming_dir_right):
         """
         handle the decision for the next state and set the nodes state to what state is decided
         """
