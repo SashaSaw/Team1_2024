@@ -172,7 +172,6 @@ class OpticalFlowNode:
         
         self.optical_flowl_pub = rospy.Publisher('/optical_flowl', Image, queue_size=0)
         self.optical_flowr_pub = rospy.Publisher('/optical_flowr', Image, queue_size=0)
-        
         topic_base_name = "/" + os.getenv("MIRO_ROBOT_NAME")
         self.vel_pub  = rospy.Publisher(topic_base_name + "/control/cmd_vel", TwistStamped, queue_size=0)
         
@@ -253,7 +252,7 @@ class OpticalFlowNode:
         handle the decision for the next state and set the nodes state to what state is decided
         """
         print(f"left: {mean_magnitude_left}, right: {mean_magnitude_right}")
-        print(f"directions:                                                                     {looming_dir_left}                                  {looming_dir_right}")
+        print(f"directions:                                   {looming_dir_left}                                  {looming_dir_right}")
         if total_looming > 100:
             if mean_magnitude_left > mean_magnitude_right and looming_dir_left == "Left" and looming_dir_right == "none":
                 self.state = 1 # set to turning right state
